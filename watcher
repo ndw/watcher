@@ -1,0 +1,109 @@
+#!/usr/bin/perl -- # --*-Perl-*--
+
+use strict;
+use English;
+use XML::XPath;
+use XML::XPath::XMLParser;
+use Filesys::Notify::Simple;
+use Cwd qw(realpath);
+use Getopt::Std;
+use vars qw($opt_d $opt_v);
+
+my $usage = "Usage: $0 [-d] [-v] [path]\n";
+
+die $usage if ! getopts('dv');
+
+my $DEBUG = $opt_d;
+my $VERBOSE = $opt_v;
+my $WATCHER = ".watcher.xml";
+my @ACTIONS = ();
+
+my $path = shift @ARGV || ".";
+$path = realpath($path);
+chdir($path) || die "Cannot chdir to $path\n";
+
+die "No $WATCHER configuration in $path\n" unless -f $WATCHER;
+
+loadActions();
+
+my @dirs = ();
+open (FIND, "find $path -type d -print |");
+while (<FIND>) {
+    chop;
+    push (@dirs, $_);
+}
+close (FIND);
+
+my $watcher = Filesys::Notify::Simple->new( \@dirs );
+while (1) {
+    $watcher->wait(
+        sub {
+            for my $event (@_) {
+                my $fn = $event->{'path'};
+
+                $fn = substr($fn, length($path)+1);
+                if (-d $fn) {
+                    print STDERR "New directory not watched: $fn\n";
+                } else {
+                    onEvent($fn);
+                }
+            }
+        });
+}
+
+sub onEvent {
+    my $fn = shift;
+
+    print "Changed: $fn\n" if $DEBUG;
+
+    loadActions() if $fn eq $WATCHER;
+
+    foreach my $action (@ACTIONS) {
+        my $match = $action->getAttribute("match") || ".*";
+
+        if ($fn =~ /$match/) {
+            my $exec = $action->findvalue(".")->value();
+
+            if ($exec eq '') {
+                print STDERR "\t===> $match (ignored)\n" if $DEBUG;
+                print STDERR "$fn => (ignored)\n"
+                    if $VERBOSE && $fn != /^\.\#/;
+                last;
+            }
+
+            $exec =~ s/\{\}/$fn/g;
+
+            print STDERR "\t===> $match ($exec)\n" if $DEBUG;
+            print STDERR "$fn => $exec\n" if $VERBOSE;
+            system("$exec &");
+            last;
+        } else {
+            print STDERR "\t=!=> $match\n" if $DEBUG;
+        }
+    }
+}
+
+sub loadActions {
+    @ACTIONS = ();
+
+    my $home = $ENV{'HOME'};
+    $home .= "/" unless $home =~ /.*\/$/;
+    $home .= $WATCHER;
+    loadWatcher($home);
+    loadWatcher($WATCHER);
+}
+
+sub loadWatcher {
+    my $filename = shift;
+
+    return if ! -f $filename;
+
+    print STDERR "Loading $filename\n" if $DEBUG;
+
+    my $xp = XML::XPath->new('filename' => $filename);
+    my $doc = ($xp->find("/watcher")->get_nodelist())[0];
+
+    foreach my $action ($xp->find("/watcher/action")->get_nodelist()) {
+        push(@ACTIONS, $action);
+    }
+}

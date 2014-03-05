@@ -1,0 +1,4 @@
+<watcher>
+  <!-- Ignore any filename that contains a # -->
+  <action match="\#"/>
+</watcher>
