@@ -1,6 +1,7 @@
 #!/usr/bin/perl -- # --*-Perl-*--
 
 use strict;
+use POSIX ":sys_wait_h";
 use English;
 use XML::XPath;
 use XML::XPath::XMLParser;
@@ -8,6 +9,17 @@ use Filesys::Notify::Simple;
 use Cwd qw(realpath);
 use Getopt::Std;
 use vars qw($opt_d $opt_v);
+
+my %children = ();
+
+$SIG{CHLD} = sub {
+    local ($!, $?);
+    my $pid = waitpid(-1, WNOHANG);
+    return if $pid == -1;
+    return unless defined $children{$pid};
+    print STDERR "Finished: ", $children{$pid}, "\n";
+    delete $children{$pid};
+};
 
 my $usage = "Usage: $0 [-d] [-v] [path]\n";
 
@@ -75,7 +87,14 @@ sub onEvent {
 
             print STDERR "\t===> $match ($exec)\n" if $DEBUG;
             print STDERR "$fn => $exec\n" if $VERBOSE;
-            system("$exec &");
+            my $child_pid = fork();
+            die "Cannot fork?\n" unless defined($child_pid);
+            if ($child_pid == 0) {
+                system("$exec");
+                exit 0;
+            } else {
+                $children{$child_pid} = $exec;
+            }
             last;
         } else {
             print STDERR "\t=!=> $match\n" if $DEBUG;
